@@ -1,98 +1,138 @@
 ---
 name: trickai-official-skill
-description: Official reference for integrating with the Trick.AI API (trick-studio.com) — image and video generation. Trigger when the user asks to use, integrate, call, or build with the Trick.AI API, when they mention "trickai" or "trick-studio" in an integration context, or when they want to generate images/videos programmatically via Trick.AI (nano-banana, seedance-2.0 models).
+description: Interactive onboarding and integration reference for the Trick.AI API (trick-studio.com). On activation, asks the user for their API key, fetches the list of available models, and shows what they can generate. Trigger when the user asks to use, integrate, call, connect to, or try the Trick.AI API, mentions "trickai" / "trick-studio" in an integration context, or wants to generate images/videos programmatically via Trick.AI.
 ---
 
-# Trick.AI API Integration Skill
+# Trick.AI Official Skill
 
-Use this skill whenever the user wants to integrate, call, or build with the Trick.AI API. It contains the full endpoint reference, request/response shapes, authentication, polling strategy, error handling, and credit semantics. When activated, generate code that is correct against this spec — do not guess endpoints or fields.
+This skill onboards the user onto the Trick.AI API interactively. When activated, it runs a short conversation: collect the API key → show available models → offer to generate something. It also carries the full API reference so any follow-up code you write is correct.
 
-## When to use
+## Activation flow — follow these steps in order
 
-Activate when the user:
-- Asks to "use the trickai api" / "call trick-studio" / "integrate trickai"
-- Wants to generate images or videos programmatically via Trick.AI
-- Mentions Trick.AI models (`nano-banana`, `seedance-2.0`) in an integration context
-- Asks about Trick.AI authentication, polling, credit costs, or webhooks
+When this skill triggers, execute this sequence. Do not skip ahead.
 
-Do NOT activate for questions about the `modiglianiai` internal codebase itself — this skill is only for the **public Trick.AI API** consumed by third parties.
+### Step 1 — Greet and ask for the API key
 
-## Core facts (never guess these)
+Output this message verbatim (in the user's language — English or Hebrew):
 
-- **Base URL**: `https://trick-studio.com/api/v1`
-- **Auth header**: `Authorization: Bearer sk-trk_YOUR_KEY`
-- **API keys**: Created at `https://trick-studio.com/dashboard/api-keys`
-- **Generation is async**: POST creates a job → poll GET until `status` is `completed` or `failed`
-- **Credits**: Charged only on successful completion. Failed generations are free.
-- **No hard rate limits**, but be reasonable — excessive usage may be throttled.
+> 👋 Trick.AI skill activated. To get started, I need your Trick.AI API key.
+>
+> 🔑 Please paste your API key (it starts with `sk-trk_`). You can create one at https://trick-studio.com/dashboard/api-keys
+>
+> 💡 Tip: if you've already set it as an environment variable named `TRICKAI_API_KEY`, just say "use env" and I'll use that instead.
 
-## Endpoints
+Then **stop and wait** for the user's response. Do not proceed to Step 2 until you have a key.
 
-### `GET /models`
-Lists all available models with pricing.
+### Step 2 — Validate and remember the key
 
-Response:
-```json
-{
-  "models": [
-    { "id": "nano-banana", "name": "Nano Banana", "type": "image", "credit_cost": 0.5, "description": "..." }
-  ]
-}
+Once the user provides a key:
+
+1. **Store it for the rest of this conversation only** — do not write it to any file, do not commit it, do not include it in code snippets (use a placeholder like `YOUR_KEY` or `process.env.TRICKAI_API_KEY` in generated code).
+2. **Validate format**: the key should match the pattern `sk-trk_[A-Za-z0-9_-]+`. If it doesn't, politely ask them to double-check.
+3. **Test the key** by fetching the balance — this confirms it works before doing anything else:
+
+```bash
+export TRICKAI_API_KEY=<user's key>
+curl -s -H "Authorization: Bearer $TRICKAI_API_KEY" https://trick-studio.com/api/v1/balance
 ```
 
-### `GET /balance`
-Returns remaining credits.
-```json
-{ "credits": 42.5 }
+   - If the response is `401` or `{"error": "invalid_api_key"}` → tell the user the key is invalid and go back to Step 1.
+   - If valid, surface their balance: "✅ Key works. You have X credits."
+
+### Step 3 — Fetch and show models
+
+Call:
+
+```bash
+curl -s -H "Authorization: Bearer $TRICKAI_API_KEY" https://trick-studio.com/api/v1/models
 ```
 
-### `POST /generations`
-Creates a generation job.
+Parse the response and present the models grouped by `type` (`image` vs `video`), like this:
 
-**Body fields:**
+```
+🖼️  Image models
+   • nano-banana (0.5 credits) — Fast product image generation
+   • <other image models from response>
+
+🎬  Video models
+   • seedance-2.0 (N credits) — <description>
+   • <other video models from response>
+```
+
+For each model, note the `credit_cost` so the user sees pricing upfront.
+
+### Step 4 — Explain what they can do and ask what's next
+
+Offer these three concrete paths:
+
+1. **Generate an image** — "Tell me what to draw (e.g. 'a red shoe on a white background') and which model to use, and I'll call the API and wait for the result."
+2. **Generate a video** — "Describe the scene, optionally give me an input image URL (for image-to-video), aspect ratio (16:9 / 9:16 / 1:1), resolution (480p / 720p), and duration (4–15s)."
+3. **Write integration code** — "Tell me your language/stack (Node, Python, Go…) and I'll produce a ready-to-paste script against this API."
+
+Wait for the user's choice.
+
+### Step 5 — Execute the chosen path
+
+For **generate image/video** paths, actually call the API in this session using Bash with the exported env var:
+
+```bash
+# Create the job
+curl -s -X POST https://trick-studio.com/api/v1/generations \
+  -H "Authorization: Bearer $TRICKAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "model": "<model>", "prompt": "<prompt>", ... }'
+```
+
+Capture the returned `id`, then poll with backoff (2s → 5s → 10s, cap at 15s, 5min timeout):
+
+```bash
+curl -s -H "Authorization: Bearer $TRICKAI_API_KEY" https://trick-studio.com/api/v1/generations/<id>
+```
+
+When `status` becomes `completed`, show the result `url` to the user. If `failed`, surface the `error` field.
+
+For the **integration code** path, generate a script in their chosen language that follows the polling + error-handling patterns in the reference section below. Use `process.env.TRICKAI_API_KEY` (or equivalent) — never embed the actual key.
+
+## Security rules (strict)
+
+- ❌ **Never write the API key to any file** on the user's disk unless they explicitly ask.
+- ❌ **Never include the raw key in any code snippet** you show — always use env-var references.
+- ❌ **Never log the key** in echo commands, comments, or debug output.
+- ✅ When calling curl in Bash, pass the key via `-H "Authorization: Bearer $TRICKAI_API_KEY"` after `export TRICKAI_API_KEY=...` so the literal value isn't repeated in your output.
+- ✅ If the user wants to persist the key, suggest they add `export TRICKAI_API_KEY=sk-trk_...` to `~/.zshrc` themselves — do not do it for them.
+
+## API reference (use these exactly — never guess)
+
+### Base URL
+`https://trick-studio.com/api/v1`
+
+### Auth
+`Authorization: Bearer sk-trk_YOUR_KEY`
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/models` | List available models with pricing |
+| GET | `/balance` | Get remaining credits |
+| POST | `/generations` | Create an image/video job |
+| GET | `/generations/:id` | Poll a job's status |
+| GET | `/generations?limit=N&offset=M&type=image\|video` | List past jobs |
+
+### `POST /generations` body
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `model` | string | yes | e.g. `nano-banana`, `seedance-2.0` |
-| `prompt` | string | yes | 1–5000 chars |
-| `aspect_ratio` | string | no | `16:9`, `9:16`, `1:1` |
-| `resolution` | string | no | `480p` or `720p` (video models) |
-| `duration` | number | no | 4–15 seconds (Seedance models) |
-| `image_urls` | string[] | no | Input image URLs for image-to-video |
+| `model` | string | ✅ | e.g. `nano-banana`, `seedance-2.0` |
+| `prompt` | string | ✅ | 1–5000 chars |
+| `aspect_ratio` | string | ⬜ | `16:9`, `9:16`, `1:1` |
+| `resolution` | string | ⬜ | `480p` or `720p` (video) |
+| `duration` | number | ⬜ | 4–15 seconds (Seedance) |
+| `image_urls` | string[] | ⬜ | Input images for image-to-video |
 
-**Response:**
-```json
-{ "id": "cmo8...", "status": "pending", "model": "nano-banana", "credit_cost": 0.5 }
-```
+### Status values
+`pending` → `processing` → `completed` (returns `url`) or `failed` (returns `error`)
 
-### `GET /generations/:id`
-Poll status. Response shape:
-```json
-{
-  "id": "...",
-  "type": "image",
-  "model": "nano-banana",
-  "prompt": "...",
-  "status": "pending" | "processing" | "completed" | "failed",
-  "credit_cost": 0.5,
-  "url": null | "https://cdn.trickai.com/.../file.png",
-  "error": null | "...",
-  "created_at": "ISO-8601",
-  "updated_at": "ISO-8601"
-}
-```
-
-### `GET /generations`
-List past generations with pagination.
-- Query params: `limit` (default 20, max 100), `offset` (default 0), `type` (`image` | `video`)
-- Response: `{ data: [...], total, limit, offset }`
-
-## Status values
-- `pending` — submitted, waiting in queue
-- `processing` — generation in progress
-- `completed` — done; `url` contains the result
-- `failed` — failed; `error` contains the reason
-
-## Error codes
+### Error codes
 | HTTP | Code | Meaning |
 |---|---|---|
 | 401 | `invalid_api_key` | Missing/invalid/revoked key |
@@ -102,27 +142,24 @@ List past generations with pagination.
 | 404 | `not_found` | Generation not found |
 | 500 | `generation_failed` | Internal server error |
 
-## Polling strategy
+### Credits
+Charged only on successful completion. Failed generations are free. Check balance with `GET /balance`.
 
-Recommend **exponential backoff**: start at 2s, increase to 5–10s, cap at 15s. Give up after ~5 minutes with a timeout error.
-
-Reference TypeScript implementation:
+## Reference polling implementation (TypeScript)
 
 ```typescript
 async function waitForGeneration(id: string, apiKey: string): Promise<string> {
   const delays = [2000, 2000, 3000, 5000, 5000, 10000]; // then cap at 10s
   let attempt = 0;
-  const deadline = Date.now() + 5 * 60 * 1000; // 5 min timeout
+  const deadline = Date.now() + 5 * 60 * 1000;
 
   while (Date.now() < deadline) {
     const res = await fetch(`https://trick-studio.com/api/v1/generations/${id}`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     const job = await res.json();
-
     if (job.status === "completed") return job.url;
     if (job.status === "failed") throw new Error(`Generation failed: ${job.error}`);
-
     const delay = delays[Math.min(attempt++, delays.length - 1)];
     await new Promise((r) => setTimeout(r, delay));
   }
@@ -130,89 +167,35 @@ async function waitForGeneration(id: string, apiKey: string): Promise<string> {
 }
 ```
 
-## Reference snippets
+## Full end-to-end reference (TypeScript)
 
-### Image generation (curl)
-```bash
-curl -X POST https://trick-studio.com/api/v1/generations \
-  -H "Authorization: Bearer sk-trk_YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "nano-banana",
-    "prompt": "a red shoe on a white background, studio lighting"
-  }'
-```
-
-### Video generation (curl)
-```bash
-curl -X POST https://trick-studio.com/api/v1/generations \
-  -H "Authorization: Bearer sk-trk_YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "seedance-2.0",
-    "prompt": "a cat walking on a beach at sunset",
-    "aspect_ratio": "16:9",
-    "resolution": "720p",
-    "duration": 5
-  }'
-```
-
-### Image-to-video (curl)
-```bash
-curl -X POST https://trick-studio.com/api/v1/generations \
-  -H "Authorization: Bearer sk-trk_YOUR_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "seedance-2.0",
-    "prompt": "the product slowly rotating",
-    "image_urls": ["https://example.com/product.png"],
-    "duration": 5
-  }'
-```
-
-### Full end-to-end (TypeScript)
 ```typescript
 const API_KEY = process.env.TRICKAI_API_KEY!;
-const BASE_URL = "https://trick-studio.com/api/v1";
+const BASE = "https://trick-studio.com/api/v1";
 
 async function generate(model: string, prompt: string, extras: Record<string, unknown> = {}) {
-  const create = await fetch(`${BASE_URL}/generations`, {
+  const res = await fetch(`${BASE}/generations`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${API_KEY}`,
-      "Content-Type": "application/json",
-    },
+    headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model, prompt, ...extras }),
   });
-  if (!create.ok) throw new Error(`Create failed: ${create.status} ${await create.text()}`);
-  const { id } = await create.json();
-  return waitForGeneration(id, API_KEY); // from polling section
+  if (!res.ok) throw new Error(`Create failed: ${res.status} ${await res.text()}`);
+  const { id } = await res.json();
+  return waitForGeneration(id, API_KEY);
 }
 
-// Image
-const imageUrl = await generate("nano-banana", "a red shoe on white background");
-
-// Video
+// Usage
+const imageUrl = await generate("nano-banana", "a red shoe on white");
 const videoUrl = await generate("seedance-2.0", "a cat on a beach", {
-  aspect_ratio: "16:9",
-  resolution: "720p",
-  duration: 5,
+  aspect_ratio: "16:9", resolution: "720p", duration: 5,
 });
 ```
 
-## Output format guidance
-
-When generating integration code for the user:
-1. **Always** use `Bearer` auth header exactly as shown; never invent alternate auth schemes
-2. **Always** implement polling with backoff — do not tight-loop
-3. **Always** handle the four status values, especially `failed` (surface `error` field)
-4. **Never** hardcode API keys — read from env var (`TRICKAI_API_KEY` is the convention)
-5. Prefer `fetch` over external HTTP libraries unless the user's stack requires otherwise
-6. If the user wants to store results, note that `url` is a CDN link (public, suitable for direct use or re-upload)
-
 ## Common mistakes to avoid
-- ❌ Assuming generation is synchronous — it isn't, you must poll
-- ❌ Polling faster than 2s intervals — wasteful
-- ❌ Charging the user's logic for failed jobs — the API doesn't charge for failures
-- ❌ Using `api.trickai.com` or other guessed domains — the correct base is `trick-studio.com/api/v1`
-- ❌ Sending credentials in query strings — always use the `Authorization` header
+
+- ❌ Skipping Step 1 — always ask for the key first, even if the user dives straight into "generate me a cat video"
+- ❌ Hardcoding the key into code snippets
+- ❌ Tight-looping without backoff when polling
+- ❌ Assuming the generation is synchronous
+- ❌ Using wrong domain like `api.trickai.com` — it's `trick-studio.com/api/v1`
+- ❌ Charging logic for failed jobs — the API doesn't charge for failures
