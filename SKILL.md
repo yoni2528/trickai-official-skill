@@ -1,6 +1,6 @@
 ---
 name: trickai-official-skill
-description: Interactive onboarding and integration reference for the Trick.AI API (trick-studio.com). On activation, asks the user for their API key, fetches the list of available models, and shows what they can generate. Trigger when the user asks to use, integrate, call, connect to, or try the Trick.AI API, mentions "trickai" / "trick-studio" in an integration context, or wants to generate images/videos programmatically via Trick.AI.
+description: Interactive onboarding and integration reference for the Trick.AI API (www.trick-studio.com). On activation, asks the user for their API key, fetches the list of available models, and shows what they can generate. Trigger when the user asks to use, integrate, call, connect to, or try the Trick.AI API, mentions "trickai" / "trick-studio" in an integration context, or wants to generate images/videos programmatically via Trick.AI.
 ---
 
 # Trick.AI Official Skill
@@ -33,7 +33,7 @@ Once the user provides a key:
 
 ```bash
 export TRICKAI_API_KEY=<user's key>
-curl -s -H "Authorization: Bearer $TRICKAI_API_KEY" https://trick-studio.com/api/v1/balance
+curl -s -H "Authorization: Bearer $TRICKAI_API_KEY" https://www.trick-studio.com/api/v1/balance
 ```
 
    - If the response is `401` or `{"error": "invalid_api_key"}` → tell the user the key is invalid and go back to Step 1.
@@ -44,7 +44,7 @@ curl -s -H "Authorization: Bearer $TRICKAI_API_KEY" https://trick-studio.com/api
 Call:
 
 ```bash
-curl -s -H "Authorization: Bearer $TRICKAI_API_KEY" https://trick-studio.com/api/v1/models
+curl -s -H "Authorization: Bearer $TRICKAI_API_KEY" https://www.trick-studio.com/api/v1/models
 ```
 
 Parse the response and present the models grouped by `type` (`image` vs `video`), like this:
@@ -77,7 +77,7 @@ For **generate image/video** paths, actually call the API in this session using 
 
 ```bash
 # Create the job
-curl -s -X POST https://trick-studio.com/api/v1/generations \
+curl -s -X POST https://www.trick-studio.com/api/v1/generations \
   -H "Authorization: Bearer $TRICKAI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{ "model": "<model>", "prompt": "<prompt>", ... }'
@@ -86,7 +86,7 @@ curl -s -X POST https://trick-studio.com/api/v1/generations \
 Capture the returned `id`, then poll with backoff (2s → 5s → 10s, cap at 15s, 5min timeout):
 
 ```bash
-curl -s -H "Authorization: Bearer $TRICKAI_API_KEY" https://trick-studio.com/api/v1/generations/<id>
+curl -s -H "Authorization: Bearer $TRICKAI_API_KEY" https://www.trick-studio.com/api/v1/generations/<id>
 ```
 
 When `status` becomes `completed`, show the result `url` to the user. If `failed`, surface the `error` field.
@@ -104,7 +104,9 @@ For the **integration code** path, generate a script in their chosen language th
 ## API reference (use these exactly — never guess)
 
 ### Base URL
-`https://trick-studio.com/api/v1`
+`https://www.trick-studio.com/api/v1`
+
+> ⚠️ **Important**: Always use the `www.` subdomain. The apex `trick-studio.com` returns a 307 redirect to `www.`, and most HTTP clients (including `curl` and `fetch`) **strip the `Authorization` header on redirect**, which causes 401 errors. Hitting `www.trick-studio.com` directly avoids the redirect entirely.
 
 ### Auth
 `Authorization: Bearer sk-trk_YOUR_KEY`
@@ -154,7 +156,7 @@ async function waitForGeneration(id: string, apiKey: string): Promise<string> {
   const deadline = Date.now() + 5 * 60 * 1000;
 
   while (Date.now() < deadline) {
-    const res = await fetch(`https://trick-studio.com/api/v1/generations/${id}`, {
+    const res = await fetch(`https://www.trick-studio.com/api/v1/generations/${id}`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     const job = await res.json();
@@ -171,7 +173,7 @@ async function waitForGeneration(id: string, apiKey: string): Promise<string> {
 
 ```typescript
 const API_KEY = process.env.TRICKAI_API_KEY!;
-const BASE = "https://trick-studio.com/api/v1";
+const BASE = "https://www.trick-studio.com/api/v1";
 
 async function generate(model: string, prompt: string, extras: Record<string, unknown> = {}) {
   const res = await fetch(`${BASE}/generations`, {
@@ -197,5 +199,5 @@ const videoUrl = await generate("seedance-2.0", "a cat on a beach", {
 - ❌ Hardcoding the key into code snippets
 - ❌ Tight-looping without backoff when polling
 - ❌ Assuming the generation is synchronous
-- ❌ Using wrong domain like `api.trickai.com` — it's `trick-studio.com/api/v1`
+- ❌ Using wrong domain like `api.trickai.com` or the apex `trick-studio.com` — the correct base is `https://www.trick-studio.com/api/v1` (apex redirects and the `Authorization` header is stripped on redirect)
 - ❌ Charging logic for failed jobs — the API doesn't charge for failures
